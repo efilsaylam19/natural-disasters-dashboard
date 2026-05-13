@@ -12,7 +12,8 @@ library(shiny)
 # 1. LOAD & CLEAN DATA
 # ============================================
 
-setwd("C:/Users/eemre/Desktop/natural-disasters-dashboard")
+# Script'in bulunduğu klasörü otomatik algıla — her bilgisayarda çalışır
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
 df <- read_csv("1900_2021_DISASTERS.xlsx - emdat data.csv")
 
