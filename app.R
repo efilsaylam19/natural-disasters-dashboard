@@ -19,7 +19,7 @@ library(sf)          # fay hattı GeoJSON okuma için
 # DATA LOADING & CLEANING
 # ============================================
 
-setwd("C:/Users/eemre/Desktop/natural-disasters-dashboard")
+
 
 df <- read_csv("1900_2021_DISASTERS.xlsx - emdat data.csv")
 
