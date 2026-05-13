@@ -13,12 +13,13 @@ library(wbstats)
 library(maps)
 library(countrycode)
 library(scales)
+library(sf)          # fay hattı GeoJSON okuma için
 
 # ============================================
 # DATA LOADING & CLEANING
 # ============================================
 
-setwd("C:/Users/LENOVO/Desktop/CEN314_Project")
+setwd("C:/Users/eemre/Desktop/natural-disasters-dashboard")
 
 df <- read_csv("1900_2021_DISASTERS.xlsx - emdat data.csv")
 
@@ -45,6 +46,23 @@ df_clean <- df %>%
                                "Drought", "Wildfire", "Landslide"))
 
 # ============================================
+# FAY HATTI VERiSi (tektonik plaka sınırları)
+# Kaynak: fraxen/tectonicplates (GitHub)
+# Uygulama başlangıcında bir kez yüklenir
+# ============================================
+
+fault_lines <- tryCatch(
+  sf::st_read(
+    "https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json",
+    quiet = TRUE
+  ),
+  error = function(e) {
+    message("Fay hattı verisi yüklenemedi: ", e$message)
+    NULL
+  }
+)
+
+# ============================================
 # COUNTRY COORDINATES (for world map pins)
 # Using capital city coordinates via maps package
 # ============================================
@@ -61,30 +79,24 @@ country_coords <- maps::world.cities %>%
   select(ISO, lat, long)
 
 # ============================================
-# COLOR PALETTE (continent → awesomeMarker color name)
-# awesomeMarkers accepts: "red","orange","green","blue","purple",
-#   "darkred","darkblue","darkgreen","darkpurple","cadetblue","gray"
+# COLOR PALETTE — felaket türü → hex renk
+# Hem marker hem lejant aynı hex kodunu kullanır → renk uyuşmazlığı imkânsız
 # ============================================
 
-continent_to_markercolor <- function(cont) {
-  dplyr::case_when(
-    cont == "Africa"   ~ "red",
-    cont == "Americas" ~ "orange",
-    cont == "Asia"     ~ "green",
-    cont == "Europe"   ~ "blue",
-    cont == "Oceania"  ~ "purple",
-    TRUE               ~ "gray"
-  )
-}
-
-# Hex colors for the legend (matches marker colors visually)
-continent_legend_colors <- c(
-  "Africa"   = "#d9534f",
-  "Americas" = "#f0ad4e",
-  "Asia"     = "#5cb85c",
-  "Europe"   = "#337ab7",
-  "Oceania"  = "#9b59b6"
+disaster_legend_colors <- c(
+  "Storm"      = "#1a3a5c",
+  "Flood"      = "#5bc0de",
+  "Earthquake" = "#d9534f",
+  "Drought"    = "#f0ad4e",
+  "Wildfire"   = "#8B0000",
+  "Landslide"  = "#5cb85c"
 )
+
+# Felaket türü → hex renk (legend ile aynı kaynak)
+disaster_to_hexcolor <- function(dtype) {
+  colors <- disaster_legend_colors
+  ifelse(dtype %in% names(colors), colors[dtype], "#888888")
+}
 
 # ============================================
 # UI
@@ -262,8 +274,14 @@ ui <- fluidPage(
                                  "Upper middle income", "High income"),
                     selected = "All"),
 
+        hr(style = "margin:14px 0 6px 0; border-color:#eee;"),
+        div(class = "section-label", "Map Overlay"),
+        checkboxInput("show_faults", 
+                      HTML("&#127755; Fault Lines <span style='font-size:10px;color:#95a5a6;'>(Earthquake)</span>"),
+                      value = FALSE),
+
         hr(style = "margin:16px 0 8px 0; border-color:#eee;"),
-        p("Source: EM-DAT & World Bank",
+        p("Source: EM-DAT \u0026 World Bank",
           style = "font-size:10px; color:#bdc3c7; margin:0; text-align:center;")
       )
     ),
@@ -317,7 +335,16 @@ ui <- fluidPage(
             plotlyOutput("continent_scatter_plot", height = "270px")
           ),
 
-          # ── TAB 5: DATA TABLE ──────────────
+          # ── TAB 5: HEATMAP ─────────────────
+          tabPanel("🔥 Heatmap",
+            br(),
+            div(class = "rq-banner",
+              "RQ3: Which disaster type causes the most economic damage in each continent?"
+            ),
+            plotlyOutput("heatmap_plot", height = "420px")
+          ),
+
+          # ── TAB 6: DATA TABLE ──────────────
           tabPanel("📋 Data Table",
             br(),
             div(class = "rq-banner",
@@ -412,20 +439,53 @@ server <- function(input, output, session) {
       fitBounds(lng1 = -150, lat1 = -55, lng2 = 160, lat2 = 72)
   })
 
+  # ============================================
+  # FAY HATTI OVERLAY (checkbox ile aç/kapat)
+  # ============================================
+
+  observe({
+    proxy <- leafletProxy("world_map")
+
+    if (!is.null(fault_lines) && isTRUE(input$show_faults)) {
+      proxy %>%
+        clearGroup("fault_lines") %>%
+        addPolylines(
+          data    = fault_lines,
+          color   = "#c0392b",   # koyu kırmızı — deprem rengiyle uyumlu
+          weight  = 1.2,
+          opacity = 0.6,
+          group   = "fault_lines",
+          label   = "Tectonic Plate Boundary"
+        )
+    } else {
+      proxy %>% clearGroup("fault_lines")
+    }
+  })
+
   # Update markers whenever filters change
   observe({
     data <- map_summary()
-    req(nrow(data) > 0)
 
-    # Map each country to an awesomeMarker color name
+    # Filtreler boş sonuç döndürdüğünde mevcut markerleri temizle ve çık
+    if (nrow(data) == 0) {
+      leafletProxy("world_map") %>%
+        clearMarkers() %>%
+        clearControls()
+      return()
+    }
+
+    # Her ülke dairesi o ülkedeki baskın felaket türünün hex rengiyle boyanır
     data <- data %>%
       mutate(
-        marker_color = continent_to_markercolor(continent),
+        marker_color = disaster_to_hexcolor(top_disaster),
 
-        # Label shown on hover
-        hover_label = paste0(country, " | $",
-                             format(round(total_damages / 1e3),
-                                    big.mark = ","), "M damage"),
+        # Daire boyutu hasara göre ölçeklenir (sqrt ile aşırı fark yumuşatılır)
+        radius = scales::rescale(sqrt(total_damages), to = c(6, 24)),
+
+        # Hover etiketi: ülke + baskın felaket + hasar
+        hover_label = paste0("f30d ", country, "  ⚡ ", top_disaster,
+                             "  $", format(round(total_damages / 1e3),
+                                          big.mark = ","), "M"),
 
         # Rich HTML popup shown on click
         popup_html = paste0(
@@ -461,23 +521,20 @@ server <- function(input, output, session) {
         )
       )
 
-    # Custom red teardrop pin icon (from www/pin.png — transparent background)
-    pin_icon <- makeIcon(
-      iconUrl     = "pin.png",
-      iconWidth   = 36,
-      iconHeight  = 48,
-      iconAnchorX = 18,   # horizontal center
-      iconAnchorY = 48    # bottom tip of the pin
-    )
-
+    # CircleMarkers — hex renk doğrudan atanır, lejantla bire bir örtüşür
     leafletProxy("world_map") %>%
       clearMarkers() %>%
       clearControls() %>%
-      addMarkers(
+      addCircleMarkers(
         data         = data,
         lng          = ~long,
         lat          = ~lat,
-        icon         = pin_icon,
+        color        = ~marker_color,   # hex → border
+        fillColor    = ~marker_color,   # hex → iç alan
+        fillOpacity  = 0.85,
+        radius       = ~radius,         # hasara göre ölçekli boyut
+        weight       = 1.5,
+        opacity      = 1,
         popup        = ~popup_html,
         label        = ~hover_label,
         labelOptions = labelOptions(
@@ -488,9 +545,9 @@ server <- function(input, output, session) {
       ) %>%
       addLegend(
         position = "bottomright",
-        colors   = unname(continent_legend_colors),
-        labels   = names(continent_legend_colors),
-        title    = "Continent",
+        colors   = unname(disaster_legend_colors),
+        labels   = names(disaster_legend_colors),
+        title    = "Top Disaster Type",
         opacity  = 0.9
       )
   })
@@ -557,14 +614,16 @@ server <- function(input, output, session) {
       group_by(year, disaster_type) %>%
       summarise(total = sum(total_damages, na.rm = TRUE), .groups = "drop")
 
-    p <- ggplot(data, aes(x = year, y = total, color = disaster_type,
-                           text = paste0("Year: ", year,
-                                         "<br>Type: ", disaster_type,
-                                         "<br>Damages: $",
-                                         format(round(total),
-                                                big.mark = ","),
-                                         " (000' USD)"))) +
+    # geom_line → çizgiyi çizer (text aesthetic olmadan, aksi halde ggplotly render etmez)
+    # geom_point → aynı veriyle hover tooltip taşır (görünmez, size = 0)
+    p <- ggplot(data, aes(x = year, y = total, color = disaster_type)) +
       geom_line(linewidth = 0.8) +
+      geom_point(aes(text = paste0("Year: ", year,
+                                   "<br>Type: ", disaster_type,
+                                   "<br>Damages: $",
+                                   format(round(total), big.mark = ","),
+                                   " (000' USD)")),
+                 size = 0.8, alpha = 0.6) +
       scale_y_continuous(labels = comma) +
       scale_color_brewer(palette = "Set2") +
       labs(title = "Damage Trends Over Time by Disaster Type",
@@ -631,6 +690,61 @@ server <- function(input, output, session) {
 
   # ============================================
   # TAB 5 — DATA TABLE
+  # ============================================
+
+  # ============================================
+  # TAB 5 — HEATMAP  (RQ3)
+  # Kıta × Felaket Türü — ortalama hasar (milyar USD)
+  # ============================================
+
+  output$heatmap_plot <- renderPlotly({
+    data <- filtered_data() %>%
+      group_by(continent, disaster_type) %>%
+      summarise(
+        avg_damage   = mean(total_damages, na.rm = TRUE) / 1e6,  # milyar USD
+        total_damage = sum(total_damages,  na.rm = TRUE) / 1e6,
+        n_events     = n(),
+        .groups = "drop"
+      )
+
+    p <- ggplot(data, aes(
+        x    = continent,
+        y    = disaster_type,
+        fill = avg_damage,
+        text = paste0(
+          continent, " — ", disaster_type, "<br>",
+          "Avg Damage: $", format(round(avg_damage, 1), big.mark = ","), "B<br>",
+          "Total Damage: $", format(round(total_damage, 1), big.mark = ","), "B<br>",
+          "Events: ", n_events
+        )
+      )) +
+      geom_tile(color = "white", linewidth = 0.6) +
+      scale_fill_gradientn(
+        colors   = c("#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"),
+        name     = "Avg Damage\n($B)",
+        na.value = "#f0f2f5"
+      ) +
+      labs(
+        title = "Average Economic Damage: Continent \u00d7 Disaster Type",
+        subtitle = "Renk: k\u0131tadaki ortalama olay ba\u015f\u0131na hasar (milyar USD)",
+        x = NULL,
+        y = NULL
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x     = element_text(face = "bold", size = 11),
+        axis.text.y     = element_text(size = 11),
+        panel.grid      = element_blank(),
+        legend.position = "right",
+        plot.subtitle   = element_text(size = 10, color = "#7f8c8d")
+      )
+
+    ggplotly(p, tooltip = "text") %>%
+      layout(xaxis = list(title = ""), yaxis = list(title = ""))
+  })
+
+  # ============================================
+  # TAB 6 — DATA TABLE
   # ============================================
 
   output$data_table <- renderDT({

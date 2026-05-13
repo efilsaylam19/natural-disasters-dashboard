@@ -12,7 +12,7 @@ library(shiny)
 # 1. LOAD & CLEAN DATA
 # ============================================
 
-setwd("C:/Users/LENOVO/Desktop/CEN314_Project")
+setwd("C:/Users/eemre/Desktop/natural-disasters-dashboard")
 
 df <- read_csv("1900_2021_DISASTERS.xlsx - emdat data.csv")
 
@@ -137,6 +137,32 @@ df_clean %>%
     color = "Continent"
   ) +
   theme_minimal()
+
+# Plot 6 - Faceted line chart: damage trends by continent, per disaster type (RQ2 & RQ3)
+# facet_wrap ile her felaket türü ayrı panelde gösterilir;
+# bu grafik hem RQ2 (hangi tür daha fazla hasar) hem RQ3 (kıtalar arası fark) cevaplar.
+df_clean %>%
+  filter(year >= 1970) %>%
+  group_by(year, disaster_type, continent) %>%
+  summarise(total = sum(total_damages, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = year, y = total, color = continent)) +
+  geom_line(linewidth = 0.7, alpha = 0.85) +
+  facet_wrap(~disaster_type, scales = "free_y", ncol = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title    = "Economic Damage Trends by Disaster Type and Continent",
+    subtitle = "1970\u20132021 | Faceted by Disaster Type | Y-axis free per panel",
+    x        = "Year",
+    y        = "Total Damages (000\u2019 USD)",
+    color    = "Continent"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text       = element_text(face = "bold", size = 10),
+    strip.background = element_rect(fill = "#f0f2f5", color = NA),
+    panel.spacing    = unit(1, "lines")
+  )
 
 # ============================================
 # 3. INTERACTIVE PLOTS (PLOTLY)
