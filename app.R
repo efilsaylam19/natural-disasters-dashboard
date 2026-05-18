@@ -46,6 +46,51 @@ df_clean <- df %>%
                                "Drought", "Wildfire", "Landslide"))
 
 # ============================================
+# CPI INFLATION ADJUSTMENT (World Bank, base year = 2021)
+# Nominal USD → Constant 2021 USD
+# Covers 1960–2021; pre-1960 records keep nominal value
+# ============================================
+
+cpi_raw <- wb_data("FP.CPI.TOTL", country = "US",
+                   start_date = 1960, end_date = 2021) %>%
+  select(year = date, cpi = FP.CPI.TOTL) %>%
+  filter(!is.na(cpi))
+
+cpi_2021   <- cpi_raw %>% filter(year == 2021) %>% pull(cpi)
+cpi_index  <- cpi_raw %>%
+  mutate(cpi_factor = cpi_2021 / cpi) %>%
+  select(year, cpi_factor)
+
+df_clean <- df_clean %>%
+  left_join(cpi_index, by = "year") %>%
+  mutate(
+    real_damages = if_else(!is.na(cpi_factor),
+                           total_damages * cpi_factor,
+                           total_damages)
+  )
+
+# ============================================
+# GDP NORMALIZATION (World Bank, NY.GDP.MKTP.CD)
+# damage_pct_gdp = damage as % of GDP — strips infrastructure cost bias
+# total_damages is in 000' USD; GDP is in USD → multiply damages * 1000 first
+# ============================================
+
+gdp_raw <- wb_data("NY.GDP.MKTP.CD", country = "all",
+                   start_date = 1960, end_date = 2021) %>%
+  select(ISO = iso3c, year = date, gdp = NY.GDP.MKTP.CD) %>%
+  filter(!is.na(gdp))
+
+df_clean <- df_clean %>%
+  left_join(gdp_raw, by = c("ISO", "year")) %>%
+  mutate(
+    damage_pct_gdp = if_else(
+      !is.na(gdp) & gdp > 0,
+      (total_damages * 1000) / gdp * 100,
+      NA_real_
+    )
+  )
+
+# ============================================
 # FAY HATTI VERiSi (tektonik plaka sınırları)
 # Kaynak: fraxen/tectonicplates (GitHub)
 # Uygulama başlangıcında bir kez yüklenir
@@ -107,129 +152,204 @@ ui <- fluidPage(
 
   tags$head(tags$style(HTML("
 
-    /* ── Global ── */
+    /* ══════════════════════════════════════════
+       GLOBAL
+    ══════════════════════════════════════════ */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; }
+
     body {
-      font-family: 'Segoe UI', Helvetica, sans-serif;
-      background-color: #f0f2f5;
+      font-family: 'Inter', 'Segoe UI', Helvetica, sans-serif;
+      background-color: #f1f5f9;
       margin: 0; padding: 0;
+      color: #1e293b;
     }
 
-    /* ── Top header bar ── */
+    /* ══════════════════════════════════════════
+       HEADER
+    ══════════════════════════════════════════ */
     .top-header {
-      background: linear-gradient(135deg, #1a2332 0%, #2c3e50 100%);
+      background: linear-gradient(135deg, #0f1923 0%, #1d3557 60%, #22405f 100%);
       color: white;
-      padding: 18px 30px 14px 30px;
-      margin-bottom: 0;
+      padding: 16px 32px 14px 32px;
+      border-bottom: 3px solid #2563eb;
     }
     .top-header h2 {
-      margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.3px;
+      margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -0.2px;
     }
     .top-header p {
-      margin: 4px 0 0 0; font-size: 12px; opacity: 0.7; letter-spacing: 0.5px;
+      margin: 5px 0 0 0; font-size: 11.5px; opacity: 0.60;
+      letter-spacing: 0.4px; font-weight: 400;
     }
 
-    /* ── Stat cards ── */
+    /* ══════════════════════════════════════════
+       STAT CARDS
+    ══════════════════════════════════════════ */
     .stat-bar {
       background: #ffffff;
-      border-bottom: 1px solid #dee2e6;
-      padding: 12px 30px;
-      display: flex; gap: 16px;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 14px 32px;
+      display: flex; gap: 14px;
     }
     .stat-card {
-      flex: 1; background: #fff; border-radius: 8px;
-      padding: 12px 18px; text-align: center;
-      border-left: 4px solid #2c3e50;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      flex: 1; background: #ffffff;
+      border-radius: 10px;
+      padding: 14px 20px 12px 20px;
+      border: 1px solid #e2e8f0;
+      border-top: 3px solid #94a3b8;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      transition: box-shadow 0.2s;
     }
-    .stat-card.blue  { border-left-color: #3498db; }
-    .stat-card.red   { border-left-color: #e74c3c; }
-    .stat-card.green { border-left-color: #27ae60; }
-    .stat-card.orange{ border-left-color: #e67e22; }
+    .stat-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.10); }
+    .stat-card.blue   { border-top-color: #2563eb; }
+    .stat-card.red    { border-top-color: #dc2626; }
+    .stat-card.orange { border-top-color: #ea580c; }
+    .stat-card.green  { border-top-color: #16a34a; }
     .stat-card .stat-value {
-      font-size: 22px; font-weight: 700; color: #2c3e50; line-height: 1.2;
+      font-size: 24px; font-weight: 700; color: #0f172a;
+      line-height: 1.15; letter-spacing: -0.5px;
     }
     .stat-card .stat-label {
-      font-size: 11px; color: #7f8c8d; text-transform: uppercase;
-      letter-spacing: 0.6px; margin-top: 2px;
+      font-size: 10.5px; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.8px;
+      margin-top: 4px; font-weight: 600;
     }
 
-    /* ── Sidebar ── */
+    /* ══════════════════════════════════════════
+       SIDEBAR
+    ══════════════════════════════════════════ */
     .sidebar-wrap {
-      background: #ffffff; border-radius: 10px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-      padding: 18px 16px; margin-top: 16px; margin-left: 12px;
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      padding: 20px 18px;
+      margin-top: 16px;
+      margin-left: 12px;
     }
     .sidebar-wrap h4 {
-      color: #1a2332; font-weight: 700; font-size: 14px;
-      text-transform: uppercase; letter-spacing: 0.8px; margin: 0 0 12px 0;
+      color: #0f172a; font-weight: 700; font-size: 12px;
+      text-transform: uppercase; letter-spacing: 1px;
+      margin: 0 0 16px 0;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #f1f5f9;
     }
     .sidebar-wrap .section-label {
-      font-size: 11px; font-weight: 600; color: #95a5a6;
-      text-transform: uppercase; letter-spacing: 0.7px;
-      margin: 14px 0 4px 0;
+      font-size: 10.5px; font-weight: 700; color: #94a3b8;
+      text-transform: uppercase; letter-spacing: 0.9px;
+      margin: 16px 0 6px 0; display: block;
     }
-    .well { background: transparent !important; border: none !important;
-            box-shadow: none !important; padding: 0 !important; }
+    .well {
+      background: transparent !important; border: none !important;
+      box-shadow: none !important; padding: 0 !important;
+    }
 
-    /* ── Tabs ── */
+    /* Checkbox styling */
+    .checkbox label { font-size: 13px; color: #334155; font-weight: 500; }
+
+    /* Select & form controls */
+    .form-control {
+      border-radius: 7px; border: 1px solid #e2e8f0;
+      font-size: 13px; color: #334155; font-weight: 500;
+      box-shadow: none !important;
+    }
+    .form-control:focus { border-color: #2563eb !important; }
+
+    /* Slider accent */
+    .irs-bar        { background: #2563eb !important; border-color: #2563eb !important; }
+    .irs-handle     { border-color: #2563eb !important; background: #fff !important; }
+    .irs-from, .irs-to, .irs-single { background: #2563eb !important; border-radius: 4px; }
+    .irs-line       { background: #e2e8f0 !important; border-color: #e2e8f0 !important; }
+
+    /* ══════════════════════════════════════════
+       TABS
+    ══════════════════════════════════════════ */
     .main-wrap { margin: 16px 12px 16px 0; }
+
     .nav-tabs {
-      border-bottom: 2px solid #dee2e6;
+      border-bottom: 1px solid #e2e8f0 !important;
       background: #ffffff;
-      border-radius: 10px 10px 0 0;
-      padding: 0 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      border-radius: 12px 12px 0 0;
+      padding: 0 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
     }
     .nav-tabs > li > a {
-      color: #5d6d7e; font-weight: 600; font-size: 13px;
-      border: none !important; border-bottom: 3px solid transparent !important;
-      padding: 12px 16px; margin-bottom: -2px; border-radius: 0 !important;
+      color: #64748b; font-weight: 600; font-size: 12.5px;
+      border: none !important;
+      border-bottom: 2px solid transparent !important;
+      padding: 13px 15px; margin-bottom: -1px;
+      border-radius: 0 !important;
+      transition: color 0.15s, border-color 0.15s;
+      letter-spacing: 0.1px;
     }
     .nav-tabs > li > a:hover {
-      color: #2c3e50; background: transparent !important;
-      border-bottom-color: #bdc3c7 !important;
+      color: #1e293b; background: transparent !important;
+      border-bottom-color: #cbd5e1 !important;
     }
     .nav-tabs > li.active > a,
     .nav-tabs > li.active > a:focus {
-      color: #2980b9 !important; background: transparent !important;
-      border-bottom: 3px solid #2980b9 !important;
+      color: #2563eb !important; background: transparent !important;
+      border-bottom: 2px solid #2563eb !important;
     }
     .tab-content {
-      background: #ffffff; border-radius: 0 0 10px 10px;
-      padding: 20px 24px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      background: #ffffff;
+      border-radius: 0 0 12px 12px;
+      padding: 22px 26px 26px 26px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+      border: 1px solid #e2e8f0;
+      border-top: none;
     }
 
-    /* ── Tab research question banners ── */
+    /* ══════════════════════════════════════════
+       RQ BANNERS
+    ══════════════════════════════════════════ */
     .rq-banner {
-      background: linear-gradient(90deg, #eaf4fb, #f8f9fa);
-      border-left: 4px solid #2980b9;
-      border-radius: 0 6px 6px 0;
-      padding: 10px 16px; margin-bottom: 16px;
-      font-size: 13px; color: #2c3e50; font-weight: 600;
+      background: #f8fafc;
+      border-left: 3px solid #2563eb;
+      border-radius: 0 8px 8px 0;
+      padding: 9px 16px;
+      margin-bottom: 14px;
+      font-size: 12.5px;
+      color: #334155;
+      font-weight: 500;
+      letter-spacing: 0.1px;
     }
 
-    /* ── Leaflet map ── */
-    .leaflet-container { border-radius: 8px; }
+    /* ══════════════════════════════════════════
+       MAP & PLOTLY
+    ══════════════════════════════════════════ */
+    .leaflet-container { border-radius: 10px; border: 1px solid #e2e8f0; }
+    .leaflet-control-zoom a {
+      border-radius: 6px !important;
+      font-size: 16px !important;
+    }
 
-    /* ── Slider & inputs ── */
-    .irs-bar { background: #2980b9 !important; border-color: #2980b9 !important; }
-    .irs-handle { border-color: #2980b9 !important; }
-    .irs-from, .irs-to, .irs-single { background: #2980b9 !important; }
-    .form-control { border-radius: 6px; border-color: #dee2e6; font-size: 13px; }
-    .checkbox label { font-size: 13px; }
+    /* Clean up plotly toolbar */
+    .modebar { opacity: 0.4; transition: opacity 0.2s; }
+    .modebar:hover { opacity: 1; }
 
-    /* ── DT table ── */
-    .dataTables_wrapper { font-size: 13px; }
+    /* ══════════════════════════════════════════
+       DATA TABLE
+    ══════════════════════════════════════════ */
+    .dataTables_wrapper { font-size: 13px; color: #334155; }
+    table.dataTable thead th {
+      background: #f8fafc; color: #475569;
+      font-weight: 700; font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      border-bottom: 2px solid #e2e8f0 !important;
+    }
+    table.dataTable tbody tr:hover { background: #f0f9ff !important; }
+
   "))),
 
   # ── TOP HEADER ──────────────────────────────────
   div(class = "top-header",
-    div(style = "display:flex; align-items:center; gap:12px;",
-      span("🌍", style = "font-size:32px;"),
+    div(style = "display:flex; align-items:center; gap:14px;",
+      span("🌍", style = "font-size:30px; opacity:0.9;"),
       div(
         h2("Natural Disasters & Economic Impact Dashboard"),
-        p("EM-DAT Global Dataset  |  1900–2021  |  Storm · Flood · Earthquake · Drought · Wildfire · Landslide")
+        p("EM-DAT Global Dataset  ·  1900–2021  ·  Storm · Flood · Earthquake · Drought · Wildfire · Landslide")
       )
     )
   ),
@@ -249,7 +369,7 @@ ui <- fluidPage(
       width = 3,
       div(class = "sidebar-wrap",
 
-        h4("⚙  Filters"),
+        h4("Filters"),
 
         div(class = "section-label", "Time Period"),
         sliderInput("year_range", label = NULL,
@@ -274,15 +394,15 @@ ui <- fluidPage(
                                  "Upper middle income", "High income"),
                     selected = "All"),
 
-        hr(style = "margin:14px 0 6px 0; border-color:#eee;"),
+        hr(style = "margin:18px 0 8px 0; border:none; border-top:1px solid #f1f5f9;"),
         div(class = "section-label", "Map Overlay"),
         checkboxInput("show_faults", 
                       HTML("&#127755; Fault Lines <span style='font-size:10px;color:#95a5a6;'>(Earthquake)</span>"),
                       value = FALSE),
 
-        hr(style = "margin:16px 0 8px 0; border-color:#eee;"),
-        p("Source: EM-DAT \u0026 World Bank",
-          style = "font-size:10px; color:#bdc3c7; margin:0; text-align:center;")
+        hr(style = "margin:18px 0 10px 0; border:none; border-top:1px solid #f1f5f9;"),
+        p("Source: EM-DAT · World Bank",
+          style = "font-size:10px; color:#94a3b8; margin:0; text-align:center; letter-spacing:0.3px;")
       )
     ),
 
@@ -293,26 +413,30 @@ ui <- fluidPage(
           id = "main_tabs",
 
           # ── TAB 1: WORLD MAP ───────────────
-          tabPanel("🗺  World Map",
+          tabPanel("World Map",
             br(),
             div(class = "rq-banner",
-              "📍 Hover over a pin to preview — click to see full country details.
-               Each pin is a country with recorded disaster damage in the selected filters."
+              "Hover over a marker to preview — click for full details. Circle size reflects total economic damage."
             ),
             leafletOutput("world_map", height = "520px")
           ),
 
           # ── TAB 2: INCOME & DAMAGE ─────────
-          tabPanel("💰 Income & Damage",
+          tabPanel("Income & Damage",
             br(),
             div(class = "rq-banner",
               "RQ1: How does economic damage relate to a country's income level?"
             ),
-            plotlyOutput("income_plot", height = "450px")
+            plotlyOutput("income_plot", height = "350px"),
+            br(),
+            div(class = "rq-banner",
+              "RQ1 (normalized): Damage as % of GDP — removes infrastructure cost bias and reveals that lower-income countries bear a heavier relative burden."
+            ),
+            plotlyOutput("income_plot_normalized", height = "350px")
           ),
 
           # ── TAB 3: DAMAGE TRENDS ───────────
-          tabPanel("📈 Damage Trends",
+          tabPanel("Damage Trends",
             br(),
             div(class = "rq-banner",
               "RQ2: Which disaster types cause the most economic damage,
@@ -324,7 +448,7 @@ ui <- fluidPage(
           ),
 
           # ── TAB 4: BY CONTINENT ────────────
-          tabPanel("🌐 By Continent",
+          tabPanel("By Continent",
             br(),
             div(class = "rq-banner",
               "RQ3: How does disaster frequency and total economic loss
@@ -336,7 +460,7 @@ ui <- fluidPage(
           ),
 
           # ── TAB 5: HEATMAP ─────────────────
-          tabPanel("🔥 Heatmap",
+          tabPanel("Heatmap",
             br(),
             div(class = "rq-banner",
               "RQ3: Which disaster type causes the most economic damage in each continent?"
@@ -345,7 +469,7 @@ ui <- fluidPage(
           ),
 
           # ── TAB 6: DATA TABLE ──────────────
-          tabPanel("📋 Data Table",
+          tabPanel("Data Table",
             br(),
             div(class = "rq-banner",
               "Browse, search and sort all filtered records. Use column filters to drill down."
@@ -357,6 +481,35 @@ ui <- fluidPage(
     )
   )
 )
+
+# ============================================
+# PLOTLY THEME — consistent, professional styling
+# ============================================
+
+plotly_theme <- function(p) {
+  p %>%
+    layout(
+      paper_bgcolor = "rgba(0,0,0,0)",
+      plot_bgcolor  = "rgba(0,0,0,0)",
+      font = list(family = "Inter, Segoe UI, sans-serif", size = 12, color = "#334155"),
+      margin = list(l = 10, r = 10, t = 40, b = 10, pad = 4),
+      legend = list(bgcolor = "rgba(255,255,255,0.9)",
+                    bordercolor = "#e2e8f0", borderwidth = 1,
+                    font = list(size = 11)),
+      xaxis = list(gridcolor = "#f1f5f9", zerolinecolor = "#e2e8f0",
+                   tickfont = list(size = 11),
+                   titlefont = list(size = 12, color = "#475569")),
+      yaxis = list(gridcolor = "#f1f5f9", zerolinecolor = "#e2e8f0",
+                   tickfont = list(size = 11),
+                   titlefont = list(size = 12, color = "#475569"))
+    ) %>%
+    config(
+      displaylogo = FALSE,
+      modeBarButtonsToRemove = c("select2d", "lasso2d", "autoScale2d",
+                                 "hoverCompareCartesian", "toggleSpikelines"),
+      toImageButtonOptions = list(format = "png", width = 1200, height = 700)
+    )
+}
 
 # ============================================
 # SERVER
@@ -434,8 +587,19 @@ server <- function(input, output, session) {
 
   # Base map — fit to world bounds to eliminate gray polar area
   output$world_map <- renderLeaflet({
-    leaflet(options = leafletOptions(minZoom = 2)) %>%
-      addProviderTiles(providers$Esri.WorldStreetMap) %>%
+    leaflet(options = leafletOptions(
+        minZoom        = 2,
+        maxZoom        = 10,
+        worldCopyJump  = TRUE,   # smooth wrap-around when panning horizontally
+        zoomControl    = TRUE
+      )) %>%
+      # Clean, high-contrast basemap — no clutter, labels still visible
+      addProviderTiles(
+        providers$Esri.WorldGrayCanvas,
+        options = tileOptions(opacity = 1)
+      ) %>%
+      # Constrain vertical pan so polar gray areas never appear
+      setMaxBounds(lng1 = -180, lat1 = -60, lng2 = 180, lat2 = 80) %>%
       fitBounds(lng1 = -150, lat1 = -55, lng2 = 160, lat2 = 72)
   })
 
@@ -474,54 +638,61 @@ server <- function(input, output, session) {
       return()
     }
 
-    # Her ülke dairesi o ülkedeki baskın felaket türünün hex rengiyle boyanır
+    # Marker color from dominant disaster type
     data <- data %>%
       mutate(
         marker_color = disaster_to_hexcolor(top_disaster),
 
-        # Daire boyutu hasara göre ölçeklenir (sqrt ile aşırı fark yumuşatılır)
-        radius = scales::rescale(sqrt(total_damages), to = c(6, 24)),
+        # Radius scaled by sqrt(damage)
+        radius = scales::rescale(sqrt(total_damages), to = c(5, 22)),
 
-        # Hover etiketi: ülke + baskın felaket + hasar
-        hover_label = paste0("f30d ", country, "  ⚡ ", top_disaster,
-                             "  $", format(round(total_damages / 1e3),
-                                          big.mark = ","), "M"),
+        # Hover label: clean, concise
+        hover_label = paste0(
+          country, " · ", top_disaster,
+          "  $", format(round(total_damages / 1e3), big.mark = ","), "M"
+        ),
 
-        # Rich HTML popup shown on click
+        # Rich HTML popup — card style with colored header strip
         popup_html = paste0(
-          "<div style='font-family:Segoe UI,sans-serif;min-width:210px;",
-                           "padding:4px;'>",
-          "<h4 style='margin:0 0 8px 0;color:#2c3e50;border-bottom:",
-                     "2px solid #eee;padding-bottom:4px;'>",
-            "📍 ", country, "</h4>",
-          "<table style='width:100%;font-size:13px;border-collapse:collapse;'>",
-          "<tr style='background:#f9f9f9;'>",
-            "<td style='padding:3px 6px;'><b>Continent</b></td>",
-            "<td style='padding:3px 6px;'>",      continent,    "</td></tr>",
+          "<div style='font-family:Segoe UI,Helvetica,sans-serif;",
+                     "min-width:230px;max-width:280px;border-radius:8px;",
+                     "overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.15);'>",
+
+          "<div style='background:", marker_color, ";padding:10px 14px;'>",
+            "<span style='color:#fff;font-size:14px;font-weight:700;'>",
+              "📍 ", country, "</span><br>",
+            "<span style='color:rgba(255,255,255,0.85);font-size:11px;'>",
+              continent, " · ", top_disaster, "</span>",
+          "</div>",
+
+          "<div style='padding:10px 14px;background:#fff;'>",
+          "<table style='width:100%;font-size:12.5px;border-collapse:collapse;color:#2c3e50;'>",
+
+          "<tr style='border-bottom:1px solid #f0f0f0;'>",
+            "<td style='padding:4px 0;color:#7f8c8d;'>Events</td>",
+            "<td style='padding:4px 0;font-weight:600;text-align:right;'>",
+              format(total_events, big.mark = ","), "</td></tr>",
+
+          "<tr style='border-bottom:1px solid #f0f0f0;'>",
+            "<td style='padding:4px 0;color:#7f8c8d;'>Total Damage</td>",
+            "<td style='padding:4px 0;font-weight:700;color:#c0392b;text-align:right;'>",
+              "$", format(round(total_damages), big.mark = ","), " k</td></tr>",
+
+          "<tr style='border-bottom:1px solid #f0f0f0;'>",
+            "<td style='padding:4px 0;color:#7f8c8d;'>Deaths</td>",
+            "<td style='padding:4px 0;font-weight:600;text-align:right;'>",
+              format(total_deaths, big.mark = ","), "</td></tr>",
+
           "<tr>",
-            "<td style='padding:3px 6px;'><b>Top Disaster</b></td>",
-            "<td style='padding:3px 6px;'>",   top_disaster, "</td></tr>",
-          "<tr style='background:#f9f9f9;'>",
-            "<td style='padding:3px 6px;'><b>Total Events</b></td>",
-            "<td style='padding:3px 6px;'>",
-              format(total_events, big.mark = ","),               "</td></tr>",
-          "<tr>",
-            "<td style='padding:3px 6px;'><b>Damages (000' USD)</b></td>",
-            "<td style='padding:3px 6px;color:#c0392b;font-weight:bold;'>$",
-              format(round(total_damages), big.mark = ","),       "</td></tr>",
-          "<tr style='background:#f9f9f9;'>",
-            "<td style='padding:3px 6px;'><b>Deaths</b></td>",
-            "<td style='padding:3px 6px;'>",
-              format(total_deaths, big.mark = ","),               "</td></tr>",
-          "<tr>",
-            "<td style='padding:3px 6px;'><b>People Affected</b></td>",
-            "<td style='padding:3px 6px;'>",
-              format(total_affected, big.mark = ","),             "</td></tr>",
-          "</table></div>"
+            "<td style='padding:4px 0;color:#7f8c8d;'>People Affected</td>",
+            "<td style='padding:4px 0;font-weight:600;text-align:right;'>",
+              format(total_affected, big.mark = ","), "</td></tr>",
+
+          "</table></div></div>"
         )
       )
 
-    # CircleMarkers — hex renk doğrudan atanır, lejantla bire bir örtüşür
+    # CircleMarkers — white stroke for crisp separation on Positron basemap
     leafletProxy("world_map") %>%
       clearMarkers() %>%
       clearControls() %>%
@@ -529,26 +700,35 @@ server <- function(input, output, session) {
         data         = data,
         lng          = ~long,
         lat          = ~lat,
-        color        = ~marker_color,   # hex → border
-        fillColor    = ~marker_color,   # hex → iç alan
-        fillOpacity  = 0.85,
-        radius       = ~radius,         # hasara göre ölçekli boyut
-        weight       = 1.5,
+        color        = "#ffffff",
+        fillColor    = ~marker_color,
+        fillOpacity  = 0.80,
+        radius       = ~radius,
+        weight       = 1.8,
         opacity      = 1,
         popup        = ~popup_html,
+        popupOptions = popupOptions(maxWidth = 290, closeButton = TRUE),
         label        = ~hover_label,
         labelOptions = labelOptions(
-          style = list("font-weight" = "bold", "font-size" = "12px",
-                       "background" = "white", "border" = "1px solid #ccc",
-                       "border-radius" = "4px", "padding" = "4px 8px")
+          style = list(
+            "font-family"   = "Segoe UI, Helvetica, sans-serif",
+            "font-size"     = "12px",
+            "font-weight"   = "600",
+            "background"    = "rgba(255,255,255,0.95)",
+            "border"        = "none",
+            "border-radius" = "6px",
+            "padding"       = "4px 10px",
+            "box-shadow"    = "0 1px 6px rgba(0,0,0,0.18)"
+          ),
+          noHide = FALSE
         )
       ) %>%
       addLegend(
-        position = "bottomright",
-        colors   = unname(disaster_legend_colors),
-        labels   = names(disaster_legend_colors),
-        title    = "Top Disaster Type",
-        opacity  = 0.9
+        position  = "bottomright",
+        colors    = unname(disaster_legend_colors),
+        labels    = names(disaster_legend_colors),
+        title     = "<span style='font-size:12px;font-weight:700;'>Top Disaster Type</span>",
+        opacity   = 0.95
       )
   })
 
@@ -579,7 +759,34 @@ server <- function(input, output, session) {
       theme_minimal() +
       theme(legend.position = "none")
 
-    ggplotly(p, tooltip = "text")
+    ggplotly(p, tooltip = "text") %>% plotly_theme()
+  })
+
+  output$income_plot_normalized <- renderPlotly({
+    data <- filtered_data() %>%
+      filter(!is.na(damage_pct_gdp)) %>%
+      mutate(income_level = factor(income_level,
+                                   levels = c("Low income",
+                                              "Lower middle income",
+                                              "Upper middle income",
+                                              "High income")))
+
+    p <- ggplot(data, aes(x = income_level, y = damage_pct_gdp,
+                           fill = income_level,
+                           text = paste0("Country: ", country,
+                                         "<br>Damage as % of GDP: ",
+                                         round(damage_pct_gdp, 3), "%"))) +
+      geom_boxplot(outlier.alpha = 0.3) +
+      scale_y_log10(labels = scales::label_number(suffix = "%")) +
+      scale_fill_brewer(palette = "RdYlGn") +
+      labs(title = "Economic Damage as % of GDP by Income Level (log scale)",
+           subtitle = "1960–2021 | Normalized: removes infrastructure cost bias",
+           x = "Income Level",
+           y = "Damage as % of GDP") +
+      theme_minimal() +
+      theme(legend.position = "none")
+
+    ggplotly(p, tooltip = "text") %>% plotly_theme()
   })
 
   # ============================================
@@ -606,13 +813,14 @@ server <- function(input, output, session) {
       theme_minimal() +
       theme(legend.position = "none")
 
-    ggplotly(p, tooltip = "text")
+    ggplotly(p, tooltip = "text") %>% plotly_theme()
   })
 
   output$line_plot <- renderPlotly({
+    # Uses real_damages (constant 2021 USD) to remove nominal inflation bias
     data <- filtered_data() %>%
       group_by(year, disaster_type) %>%
-      summarise(total = sum(total_damages, na.rm = TRUE), .groups = "drop")
+      summarise(total = sum(real_damages, na.rm = TRUE), .groups = "drop")
 
     # geom_line → çizgiyi çizer (text aesthetic olmadan, aksi halde ggplotly render etmez)
     # geom_point → aynı veriyle hover tooltip taşır (görünmez, size = 0)
@@ -620,18 +828,19 @@ server <- function(input, output, session) {
       geom_line(linewidth = 0.8) +
       geom_point(aes(text = paste0("Year: ", year,
                                    "<br>Type: ", disaster_type,
-                                   "<br>Damages: $",
+                                   "<br>Damages (2021 USD): $",
                                    format(round(total), big.mark = ","),
-                                   " (000' USD)")),
+                                   " (000')")),
                  size = 0.8, alpha = 0.6) +
       scale_y_continuous(labels = comma) +
       scale_color_brewer(palette = "Set2") +
       labs(title = "Damage Trends Over Time by Disaster Type",
-           x = "Year", y = "Total Damages (000' USD)",
+           subtitle = "Constant 2021 USD (CPI-adjusted)",
+           x = "Year", y = "Total Damages (Constant 2021 USD, 000')",
            color = "Disaster Type") +
       theme_minimal()
 
-    ggplotly(p, tooltip = "text")
+    ggplotly(p, tooltip = "text") %>% plotly_theme()
   })
 
   # ============================================
@@ -654,7 +863,7 @@ server <- function(input, output, session) {
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 15, hjust = 1))
 
-    ggplotly(p, tooltip = "text")
+    ggplotly(p, tooltip = "text") %>% plotly_theme()
   })
 
   output$continent_scatter_plot <- renderPlotly({
@@ -685,7 +894,7 @@ server <- function(input, output, session) {
            color = "Continent") +
       theme_minimal()
 
-    ggplotly(p, tooltip = "text")
+    ggplotly(p, tooltip = "text") %>% plotly_theme()
   })
 
   # ============================================
@@ -740,7 +949,8 @@ server <- function(input, output, session) {
       )
 
     ggplotly(p, tooltip = "text") %>%
-      layout(xaxis = list(title = ""), yaxis = list(title = ""))
+      layout(xaxis = list(title = ""), yaxis = list(title = "")) %>%
+      plotly_theme()
   })
 
   # ============================================

@@ -40,6 +40,55 @@ df_clean <- df %>%
                               "Drought", "Wildfire", "Landslide"))
 
 # ============================================
+# CPI INFLATION ADJUSTMENT (World Bank, base year = 2021)
+# Converts nominal USD damages to constant 2021 USD
+# Indicator FP.CPI.TOTL available from ~1960 onward
+# ============================================
+
+cpi_raw <- wb_data("FP.CPI.TOTL", country = "US",
+                   start_date = 1960, end_date = 2021) %>%
+  select(year = date, cpi = FP.CPI.TOTL) %>%
+  filter(!is.na(cpi))
+
+cpi_2021 <- cpi_raw %>% filter(year == 2021) %>% pull(cpi)
+
+cpi_index <- cpi_raw %>%
+  mutate(cpi_factor = cpi_2021 / cpi) %>%   # multiply nominal by this
+  select(year, cpi_factor)
+
+df_clean <- df_clean %>%
+  left_join(cpi_index, by = "year") %>%
+  mutate(
+    # For years with CPI data: convert to 2021 USD; otherwise keep nominal
+    real_damages = if_else(!is.na(cpi_factor),
+                           total_damages * cpi_factor,
+                           total_damages)
+  )
+
+# ============================================
+# GDP NORMALIZATION (World Bank, NY.GDP.MKTP.CD)
+# Damage as % of GDP — better RQ1 metric than absolute damage
+# Country-year level GDP joined by ISO + year
+# ============================================
+
+gdp_raw <- wb_data("NY.GDP.MKTP.CD", country = "all",
+                   start_date = 1960, end_date = 2021) %>%
+  select(ISO = iso3c, year = date, gdp = NY.GDP.MKTP.CD) %>%
+  filter(!is.na(gdp))
+
+df_clean <- df_clean %>%
+  left_join(gdp_raw, by = c("ISO", "year")) %>%
+  mutate(
+    # total_damages is in 000' USD; GDP is in USD
+    # multiply damages by 1000 to convert to USD, then divide by GDP
+    damage_pct_gdp = if_else(
+      !is.na(gdp) & gdp > 0,
+      (total_damages * 1000) / gdp * 100,
+      NA_real_
+    )
+  )
+
+# ============================================
 # 2. STATIC PLOTS
 # ============================================
 
@@ -59,6 +108,28 @@ df_clean %>%
     subtitle = "1900–2021 | Log scale",
     x = "Income Level",
     y = "Total Damages (000' USD, log scale)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Plot 1b - Boxplot: GDP-normalized damage by income level (RQ1 — normalized)
+# Reveals that lower-income countries suffer HIGHER damage relative to their economy
+df_clean %>%
+  filter(!is.na(damage_pct_gdp)) %>%
+  mutate(income_level = factor(income_level,
+                               levels = c("Low income",
+                                          "Lower middle income",
+                                          "Upper middle income",
+                                          "High income"))) %>%
+  ggplot(aes(x = income_level, y = damage_pct_gdp, fill = income_level)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  scale_y_log10(labels = scales::label_number(suffix = "%")) +
+  scale_fill_brewer(palette = "RdYlGn") +
+  labs(
+    title = "Economic Damage as % of GDP by Income Level",
+    subtitle = "1960–2021 | Log scale | Normalized RQ1 metric",
+    x = "Income Level",
+    y = "Damage as % of GDP (log scale)"
   ) +
   theme_minimal() +
   theme(legend.position = "none")
@@ -83,19 +154,20 @@ df_clean %>%
   theme(legend.position = "none")
 
 # Plot 3 - Line chart: Damage trend over time (RQ2)
+# Uses CPI-adjusted real_damages (constant 2021 USD) to remove inflation bias
 df_clean %>%
   filter(year >= 1970) %>%
   group_by(year, disaster_type) %>%
-  summarise(total = sum(total_damages, na.rm = TRUE), .groups = "drop") %>%
+  summarise(total = sum(real_damages, na.rm = TRUE), .groups = "drop") %>%
   ggplot(aes(x = year, y = total, color = disaster_type)) +
   geom_line(linewidth = 0.8) +
   scale_y_continuous(labels = scales::comma) +
   scale_color_brewer(palette = "Set2") +
   labs(
     title = "Economic Damage Trends by Disaster Type Over Time",
-    subtitle = "1970–2021",
+    subtitle = "1970–2021 | Constant 2021 USD (CPI-adjusted)",
     x = "Year",
-    y = "Total Damages (000' USD)",
+    y = "Total Damages (Constant 2021 USD, 000')",
     color = "Disaster Type"
   ) +
   theme_minimal()
