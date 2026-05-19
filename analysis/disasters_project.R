@@ -1,6 +1,13 @@
 # ============================================
 # CEN314 - Final Project
 # Natural Disasters & Economic Damage
+# Exploratory Data Analysis (EDA) - disasters_project.R
+# 
+# PURPOSE:
+# This is a prototype script used for initial Exploratory Data Analysis (EDA).
+# It documents the data cleaning steps, inflation adjustments, and GDP normalization
+# logic. It also generates static ggplot2 visualizations that were later converted 
+# into interactive Plotly charts for the main Shiny Dashboard.
 # ============================================
 
 library(tidyverse)
@@ -12,10 +19,9 @@ library(shiny)
 # 1. LOAD & CLEAN DATA
 # ============================================
 
-# Script'in bulunduğu klasörü otomatik algıla — her bilgisayarda çalışır
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
-df <- read_csv("1900_2021_DISASTERS.xlsx - emdat data.csv")
+df <- read_csv("../data/emdat_data.csv")
 
 income <- wb_countries() %>%
   select(iso3c, income_level)
